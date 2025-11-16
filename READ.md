@@ -33,7 +33,7 @@ An intelligent web application that generates IEEE-format research papers using 
 
 1. Clone the repository:
 
-git clone https://github.com/YOUR_USERNAME/ai-paper-generator.git
+git clone https://github.com/AbhishekJacobSanthosh/ai-paper-generator.git
 cd ai-paper-generator
 
 text
@@ -190,7 +190,7 @@ Contributions are welcome! Please:
 - Department of Computer Science and Engineering
 - M.S. Ramaiah Institute of Technology (MSRIT)
 - Email: 1ms22cs006@msrit.edu
-- GitHub: [@yourusername](https://github.com/yourusername)
+- GitHub: [@AbhishekJacobSanthosh](https://github.com/AbhishekJacobSanthosh)
 
 ---
 

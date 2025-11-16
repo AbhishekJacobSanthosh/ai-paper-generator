@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+uploads/
+saved_papers/
+*.pdf
+*.docx
+.DS_Store
+.vscode/
+*.pyc

@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Research Paper Generator</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 20px;
+        }
+        .feature-badges {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        .badge {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #ddd;
+        }
+        .tab {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+        }
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+            font-weight: 600;
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .input-group { margin-bottom: 20px; }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        input[type="text"], input[type="email"], textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 15px;
+            transition: border-color 0.3s;
+            font-family: inherit;
+        }
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover:not(:disabled) { transform: translateY(-2px); }
+        button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .secondary-btn {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        #loading {
+            display: none;
+            text-align: center;
+            margin: 30px 0;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        #output { margin-top: 30px; display: none; }
+        .paper-header {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 25px;
+            border-radius: 10px;
+            margin-bottom: 25px;
+        }
+        .paper-title {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .paper-meta {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .meta-card {
+            background: rgba(255,255,255,0.2);
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .meta-value {
+            font-size: 22px;
+            font-weight: bold;
+        }
+        .meta-label {
+            font-size: 11px;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+        .section {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #667eea;
+        }
+        .section h3 {
+            color: #667eea;
+            margin-bottom: 12px;
+            font-size: 18px;
+        }
+        .section-content {
+            line-height: 1.8;
+            color: #333;
+            white-space: pre-wrap;
+        }
+        .action-bar {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+            margin: 25px 0;
+        }
+        .action-btn {
+            padding: 12px;
+            border-radius: 8px;
+            border: none;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+            font-size: 14px;
+        }
+        .action-btn:hover { transform: translateY(-2px); }
+        .btn-pdf { background: #28a745; color: white; }
+        .btn-docx { background: #17a2b8; color: white; }
+        .btn-plag { background: #ffc107; color: #000; }
+        .btn-copy { background: #6c757d; color: white; }
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        .figure-container {
+            text-align: center;
+            margin: 20px 0;
+        }
+        .figure-container img {
+            max-width: 100%;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .figure-caption {
+            font-size: 12px;
+            font-style: italic;
+            color: #666;
+            margin-top: 8px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: center;
+        }
+        th {
+            background: #667eea;
+            color: white;
+            font-weight: bold;
+        }
+        tr:nth-child(even) {
+            background: #f8f9fa;
+        }
+        @media (max-width: 768px) {
+            .grid-2 { grid-template-columns: 1fr; }
+            .container { padding: 20px; }
+            h1 { font-size: 2em; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎓 AI Research Paper Generator</h1>
+        <p class="subtitle">Generate IEEE-format research papers with AI</p>
+        
+        <div class="feature-badges">
+            <span class="badge">⚡ 30-45 Sec</span>
+            <span class="badge">📄 4+ Pages</span>
+            <span class="badge">📊 Figures & Tables</span>
+            <span class="badge">🔍 Plagiarism</span>
+            <span class="badge">🖼️ OCR</span>
+        </div>
+        
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('text')">📝 Generate Paper</button>
+            <button class="tab" onclick="switchTab('ocr')">🖼️ OCR Extract</button>
+        </div>
+        
+        <div id="text-tab" class="tab-content active">
+            <div class="info-box">
+                💡 Enter your topic and details. AI generates complete IEEE paper with figures in 30-45 seconds.
+            </div>
+            
+            <div class="input-group">
+                <label>📋 Research Topic *</label>
+                <input type="text" id="topic" placeholder="e.g., Machine Learning in Healthcare">
+            </div>
+            
+            <div class="grid-2">
+                <div class="input-group">
+                    <label>👤 Author Name</label>
+                    <input type="text" id="authorName" placeholder="Your Name" value="Student Researcher">
+                </div>
+                <div class="input-group">
+                    <label>📧 Email</label>
+                    <input type="email" id="email" placeholder="email@edu" value="student@university.edu">
+                </div>
+            </div>
+            
+            <div class="input-group">
+                <label>🏛️ Affiliation</label>
+                <input type="text" id="affiliation" placeholder="University Name" value="Department of CS, University">
+            </div>
+            
+            <button id="generateBtn" onclick="generatePaper()">
+                🚀 Generate Research Paper
+            </button>
+        </div>
+        
+        <div id="ocr-tab" class="tab-content">
+            <div class="info-box">
+                📸 Upload typed/printed text images for best OCR results.
+            </div>
+            
+            <div class="input-group">
+                <label>📷 Upload Image</label>
+                <input type="file" id="imageUpload" accept="image/*">
+            </div>
+            
+            <button onclick="extractText()" class="secondary-btn">
+                🔍 Extract Text
+            </button>
+            
+            <div id="extractedText" style="display: none; margin-top: 20px;">
+                <div class="info-box" style="background: #e8f5e9; border-color: #4caf50;">
+                    ✅ Text extracted! Review below.
+                </div>
+                <label>Extracted Text (editable)</label>
+                <textarea id="ocrResult" rows="6"></textarea>
+                <button onclick="useExtracted()" style="margin-top: 10px;">
+                    ✅ Use as Topic
+                </button>
+            </div>
+        </div>
+        
+        <div id="loading">
+            <div class="spinner"></div>
+            <p id="loadingText" style="color: #667eea; font-weight: 600;">Generating...</p>
+        </div>
+        
+        <div id="output"></div>
+    </div>
+
+    <script>
+        let currentPaper = null;
+        
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            event.target.classList.add('active');
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.getElementById(tab + '-tab').classList.add('active');
+        }
+        
+        async function generatePaper() {
+            const topic = document.getElementById('topic').value.trim();
+            const authorName = document.getElementById('authorName').value.trim();
+            const email = document.getElementById('email').value.trim();
+            const affiliation = document.getElementById('affiliation').value.trim();
+            
+            if (!topic) {
+                alert('⚠️ Please enter a research topic');
+                return;
+            }
+            
+            showLoading(true, '⚡ Generating your paper...');
+            
+            try {
+                const response = await fetch('/api/generate-paper', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        topic: topic,
+                        author_name: authorName,
+                        email: email,
+                        affiliation: affiliation
+                    })
+                });
+                
+                const data = await response.json();
+                console.log('Response:', data);
+                
+                if (data.success && data.paper) {
+                    currentPaper = data.paper;
+                    displayPaper(data.paper);
+                } else {
+                    alert('❌ Error: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('❌ Error: ' + error.message);
+                console.error(error);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        async function extractText() {
+            const file = document.getElementById('imageUpload').files[0];
+            if (!file) {
+                alert('⚠️ Select an image');
+                return;
+            }
+            
+            showLoading(true, '🔍 Extracting...');
+            
+            const formData = new FormData();
+            formData.append('image', file);
+            
+            try {
+                const response = await fetch('/api/ocr-generate', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    document.getElementById('ocrResult').value = data.extracted_text;
+                    document.getElementById('extractedText').style.display = 'block';
+                } else {
+                    alert('❌ ' + data.error);
+                }
+            } catch (error) {
+                alert('❌ ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        function useExtracted() {
+            document.getElementById('topic').value = document.getElementById('ocrResult').value;
+            document.querySelectorAll('.tab')[0].click();
+        }
+        
+        function showLoading(show, text = '') {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+            document.getElementById('output').style.display = show ? 'none' : 'block';
+            document.getElementById('generateBtn').disabled = show;
+            if (text) document.getElementById('loadingText').textContent = text;
+        }
+        
+        function displayPaper(paper) {
+            const output = document.getElementById('output');
+            
+            let html = `
+                <div class="paper-header">
+                    <div class="paper-title">${paper.title || 'Research Paper'}</div>
+                    <div style="margin-top: 8px; opacity: 0.9;">
+                        👤 ${paper.author || 'Author'} | 🏛️ ${paper.affiliation || 'Institution'}<br/>
+                        📧 ${paper.email || 'N/A'} | 🔗 DOI: ${paper.doi || 'N/A'}
+                    </div>
+                    <div class="paper-meta">
+                        <div class="meta-card">
+                            <div class="meta-value">${paper.metadata?.word_count || '0'}</div>
+                            <div class="meta-label">WORDS</div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="meta-value">${paper.metadata?.page_estimate || '0'}</div>
+                            <div class="meta-label">PAGES</div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="meta-value">${Object.keys(paper.sections || {}).length}</div>
+                            <div class="meta-label">SECTIONS</div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="meta-value">${paper.metadata?.has_figures || 0}</div>
+                            <div class="meta-label">FIGURES</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="action-bar">
+                    <button class="action-btn btn-pdf" onclick="exportPDF()">📄 PDF</button>
+                    <button class="action-btn btn-docx" onclick="exportDOCX()">📝 DOCX</button>
+                    <button class="action-btn btn-plag" onclick="checkPlagiarism()">🔍 Plagiarism</button>
+                    <button class="action-btn btn-copy" onclick="copyText()">📋 Copy</button>
+                </div>
+            `;
+            
+            const sections = ['abstract', 'introduction', 'literature_review', 'methodology', 
+                             'results', 'discussion', 'conclusion', 'references'];
+            const titles = {
+                'abstract': 'Abstract',
+                'introduction': 'I. Introduction',
+                'literature_review': 'II. Literature Review',
+                'methodology': 'III. Methodology',
+                'results': 'IV. Results',
+                'discussion': 'V. Discussion',
+                'conclusion': 'VI. Conclusion',
+                'references': 'References'
+            };
+            
+            sections.forEach(key => {
+                if (paper.sections && paper.sections[key]) {
+                    const content = paper.sections[key].toString();
+                    html += `
+                        <div class="section">
+                            <h3>${titles[key]}</h3>
+                            <div class="section-content">${content}</div>
+                        </div>
+                    `;
+                }
+            });
+            
+            if (paper.figures) {
+                html += '<div class="section"><h3>Figures and Tables</h3>';
+                
+                if (paper.figures.figure1) {
+                    html += `
+                        <div class="figure-container">
+                            <img src="data:image/png;base64,${paper.figures.figure1.data}" alt="Figure 1">
+                            <div class="figure-caption">${paper.figures.figure1.caption}</div>
+                        </div>
+                    `;
+                }
+                
+                if (paper.figures.table1) {
+                    html += '<table>';
+                    paper.figures.table1.data.forEach((row, idx) => {
+                        html += '<tr>';
+                        row.forEach(cell => {
+                            const tag = idx === 0 ? 'th' : 'td';
+                            html += `<${tag}>${cell}</${tag}>`;
+                        });
+                        html += '</tr>';
+                    });
+                    html += '</table>';
+                    html += `<div class="figure-caption">${paper.figures.table1.caption}</div>`;
+                }
+                
+                if (paper.figures.figure2) {
+                    html += `
+                        <div class="figure-container">
+                            <img src="data:image/png;base64,${paper.figures.figure2.data}" alt="Figure 2">
+                            <div class="figure-caption">${paper.figures.figure2.caption}</div>
+                        </div>
+                    `;
+                }
+                
+                html += '</div>';
+            }
+            
+            output.innerHTML = html;
+            output.style.display = 'block';
+            setTimeout(() => output.scrollIntoView({ behavior: 'smooth' }), 100);
+        }
+        
+        async function exportPDF() {
+            if (!currentPaper) return alert('❌ No paper');
+            showLoading(true, '📄 Generating PDF...');
+            
+            try {
+                const response = await fetch('/api/export-pdf', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ paper: currentPaper })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `IEEE_Paper_${Date.now()}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    alert('✅ PDF downloaded!');
+                } else {
+                    alert('❌ PDF failed');
+                }
+            } catch (error) {
+                alert('❌ ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        async function exportDOCX() {
+            if (!currentPaper) return alert('❌ No paper');
+            showLoading(true, '📝 Generating DOCX...');
+            
+            try {
+                const response = await fetch('/api/export-docx', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ paper: currentPaper })
+                });
+                
+                if (response.ok) {
+                    const blob = await response.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `Paper_${Date.now()}.docx`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    alert('✅ DOCX downloaded!');
+                } else {
+                    alert('❌ DOCX failed');
+                }
+            } catch (error) {
+                alert('❌ ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        async function checkPlagiarism() {
+    if (!currentPaper) return;
+    showLoading(true, '🔍 Checking plagiarism...');
+    
+    try {
+        const response = await fetch('/api/plagiarism-check', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ paper: currentPaper })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            const r = data.plagiarism_check;
+            
+            let message = `📊 Plagiarism Analysis\n\n`;
+            message += `Provider: ${r.api_provider}\n`;
+            message += `Uniqueness Score: ${r.uniqueness_score}%\n`;
+            message += `Status: ${r.status}\n\n`;
+            
+            if (r.is_authentic) {
+                message += `✓ Real web-based checking\n`;
+                message += `Sources Found: ${r.sources_found || 0}\n`;
+            } else {
+                message += `ℹ️ Local analysis (enhanced)\n`;
+                message += `Vocabulary Diversity: ${r.vocabulary_diversity}%\n`;
+            }
+            
+            message += `\nTotal Sentences: ${r.total_sentences}`;
+            
+            if (r.note) {
+                message += `\n\n${r.note}`;
+            }
+            
+            alert(message);
+        }
+    } catch (error) {
+        alert('❌ ' + error.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+        
+        function copyText() {
+            if (!currentPaper) return;
+            
+            let text = `${currentPaper.title}\n\nAuthor: ${currentPaper.author}\nAffiliation: ${currentPaper.affiliation}\nEmail: ${currentPaper.email}\nDOI: ${currentPaper.doi}\n\n`;
+            
+            Object.entries(currentPaper.sections).forEach(([key, content]) => {
+                text += `\n${key.toUpperCase()}\n${content}\n`;
+            });
+            
+            navigator.clipboard.writeText(text).then(() => {
+                alert('✅ Copied to clipboard!');
+            });
+        }
+    </script>
+</body>
+</html>

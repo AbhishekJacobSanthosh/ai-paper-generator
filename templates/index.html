@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Research Paper Generator</title>
+    <title>AI Research Paper Generator v3.0</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -46,6 +46,14 @@
             font-size: 12px;
             font-weight: 600;
         }
+        .badge.new {
+            background: linear-gradient(135deg, #f093fb, #f5576c);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
         .tabs {
             display: flex;
             gap: 10px;
@@ -77,7 +85,7 @@
             font-weight: 600;
             font-size: 14px;
         }
-        input[type="text"], input[type="email"], textarea {
+        input[type="text"], input[type="email"], input[type="file"], textarea, select {
             width: 100%;
             padding: 12px;
             border: 2px solid #ddd;
@@ -86,13 +94,14 @@
             transition: border-color 0.3s;
             font-family: inherit;
         }
-        input:focus, textarea:focus {
+        input:focus, textarea:focus, select:focus {
             outline: none;
             border-color: #667eea;
         }
         textarea {
             min-height: 100px;
             resize: vertical;
+            font-family: 'Courier New', monospace;
         }
         button {
             width: 100%;
@@ -110,6 +119,20 @@
         button:disabled { opacity: 0.6; cursor: not-allowed; }
         .secondary-btn {
             background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .checkbox-group input[type="checkbox"] {
+            width: auto;
+            cursor: pointer;
+        }
+        .checkbox-group label {
+            margin: 0;
+            cursor: pointer;
         }
         #loading {
             display: none;
@@ -140,7 +163,30 @@
         .paper-title {
             font-size: 24px;
             font-weight: bold;
-            margin-bottom: 10px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        .authors-list {
+            text-align: center;
+            margin-top: 15px;
+        }
+        .author-block {
+            display: inline-block;
+            margin: 10px 20px;
+            vertical-align: top;
+        }
+        .author-name {
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .author-affiliation {
+            font-size: 12px;
+            opacity: 0.9;
+            font-style: italic;
+        }
+        .author-email {
+            font-size: 11px;
+            opacity: 0.85;
         }
         .paper-meta {
             display: grid;
@@ -208,6 +254,14 @@
             margin-bottom: 20px;
             font-size: 14px;
         }
+        .info-box.success {
+            background: #e8f5e9;
+            border-left-color: #4caf50;
+        }
+        .info-box.warning {
+            background: #fff3e0;
+            border-left-color: #ff9800;
+        }
         .grid-2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -246,6 +300,83 @@
         tr:nth-child(even) {
             background: #f8f9fa;
         }
+        .collapsible {
+            background: #667eea;
+            color: white;
+            cursor: pointer;
+            padding: 15px;
+            width: 100%;
+            border: none;
+            text-align: left;
+            outline: none;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 8px;
+            margin-top: 10px;
+            transition: background 0.3s;
+        }
+        .collapsible:hover {
+            background: #764ba2;
+        }
+        .collapsible-content {
+            display: none;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 0 0 8px 8px;
+            margin-bottom: 20px;
+        }
+        .collapsible.active {
+            border-radius: 8px 8px 0 0;
+        }
+        #titleModal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-content {
+            background: white;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .author-entry {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border-left: 4px solid #667eea;
+            position: relative;
+        }
+        .author-entry-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .remove-author-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            width: auto;
+        }
+        .add-author-btn {
+            background: #28a745;
+            margin-top: 10px;
+        }
         @media (max-width: 768px) {
             .grid-2 { grid-template-columns: 1fr; }
             .container { padding: 20px; }
@@ -255,46 +386,63 @@
 </head>
 <body>
     <div class="container">
-        <h1>🎓 AI Research Paper Generator</h1>
-        <p class="subtitle">Generate IEEE-format research papers with AI</p>
+        <h1>🎓 AI Research Paper Generator v3.0</h1>
+        <p class="subtitle">Generate IEEE-format papers with RAG & Dynamic Figures</p>
         
         <div class="feature-badges">
             <span class="badge">⚡ 30-45 Sec</span>
             <span class="badge">📄 4+ Pages</span>
-            <span class="badge">📊 Figures & Tables</span>
-            <span class="badge">🔍 Plagiarism</span>
+            <span class="badge new">🔍 RAG-Powered</span>
+            <span class="badge new">📊 Dynamic Figures</span>
+            <span class="badge new">👥 Multi-Author</span>
+            <span class="badge new">✨ AI Titles</span>
             <span class="badge">🖼️ OCR</span>
         </div>
         
         <div class="tabs">
             <button class="tab active" onclick="switchTab('text')">📝 Generate Paper</button>
             <button class="tab" onclick="switchTab('ocr')">🖼️ OCR Extract</button>
+            <button class="tab" onclick="switchTab('data')">📊 Upload Data</button>
         </div>
         
         <div id="text-tab" class="tab-content active">
             <div class="info-box">
-                💡 Enter your topic and details. AI generates complete IEEE paper with figures in 30-45 seconds.
+                💡 Enter a short title OR detailed description. AI will auto-generate a professional title!
             </div>
             
             <div class="input-group">
-                <label>📋 Research Topic *</label>
-                <input type="text" id="topic" placeholder="e.g., Machine Learning in Healthcare">
+                <label>📋 Research Topic / Description *</label>
+                <textarea 
+                    id="topic" 
+                    rows="3" 
+                    placeholder="Short: 'Transformer Architectures in NLP' OR Long: 'I want to research how transformer models...'"
+                    style="min-height: 80px; font-family: inherit;"
+                ></textarea>
+                <div style="display: flex; gap: 10px; margin-top: 10px; align-items: center;">
+                    <button type="button" onclick="regenerateTitles()" class="secondary-btn" style="width: auto; padding: 10px 20px; font-size: 14px;">
+                        ✨ Suggest Titles
+                    </button>
+                    <span id="titleHint" style="color: #666; font-size: 12px; font-style: italic;">
+                        💡 AI will auto-generate a title if you provide a description
+                    </span>
+                </div>
             </div>
             
-            <div class="grid-2">
-                <div class="input-group">
-                    <label>👤 Author Name</label>
-                    <input type="text" id="authorName" placeholder="Your Name" value="Student Researcher">
-                </div>
-                <div class="input-group">
-                    <label>📧 Email</label>
-                    <input type="email" id="email" placeholder="email@edu" value="student@university.edu">
-                </div>
+            <div class="info-box success">
+                👥 <strong>Multiple Authors:</strong> Add all paper authors below
             </div>
             
-            <div class="input-group">
-                <label>🏛️ Affiliation</label>
-                <input type="text" id="affiliation" placeholder="University Name" value="Department of CS, University">
+            <div id="authorsContainer">
+                <!-- Author entries will be added here -->
+            </div>
+            
+            <button onclick="addAuthor()" class="add-author-btn" style="width: auto; padding: 10px 20px; margin-bottom: 20px;">
+                ➕ Add Author
+            </button>
+            
+            <div class="checkbox-group">
+                <input type="checkbox" id="useRAG" checked>
+                <label for="useRAG">🔍 Use RAG (Retrieve Real Research Papers)</label>
             </div>
             
             <button id="generateBtn" onclick="generatePaper()">
@@ -304,7 +452,7 @@
         
         <div id="ocr-tab" class="tab-content">
             <div class="info-box">
-                📸 Upload typed/printed text images for best OCR results.
+                📸 Upload images with typed/printed text for best OCR results.
             </div>
             
             <div class="input-group">
@@ -317,14 +465,89 @@
             </button>
             
             <div id="extractedText" style="display: none; margin-top: 20px;">
-                <div class="info-box" style="background: #e8f5e9; border-color: #4caf50;">
-                    ✅ Text extracted! Review below.
+                <div class="info-box success">
+                    ✅ Text extracted! Review and edit below.
                 </div>
                 <label>Extracted Text (editable)</label>
                 <textarea id="ocrResult" rows="6"></textarea>
                 <button onclick="useExtracted()" style="margin-top: 10px;">
                     ✅ Use as Topic
                 </button>
+            </div>
+        </div>
+        
+        <div id="data-tab" class="tab-content">
+            <div class="info-box warning">
+                📊 Upload your own data for custom tables and charts!
+            </div>
+            
+            <button class="collapsible" onclick="toggleCollapsible(this)">
+                📋 Upload Table Data (CSV Format)
+            </button>
+            <div class="collapsible-content">
+                <div class="info-box">
+                    Format: Comma-separated values. First row = headers.<br>
+                    <code>Method,Accuracy,Precision<br>Baseline,72.3,71.5<br>Proposed,92.1,91.8</code>
+                </div>
+                <textarea id="userTableData" rows="8" placeholder="Paste CSV data here..."></textarea>
+            </div>
+            
+            <button class="collapsible" onclick="toggleCollapsible(this)">
+                📈 Upload Chart 1
+            </button>
+            <div class="collapsible-content">
+                <textarea id="userChartData1" rows="6" placeholder="Paste CSV for Chart 1..."></textarea>
+                <div class="input-group" style="margin-top: 10px;">
+                    <label>Chart Type</label>
+                    <select id="userChartType1">
+                        <option value="bar">Bar Chart</option>
+                        <option value="line">Line Chart</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label>Chart Title</label>
+                    <input type="text" id="userChartTitle1" placeholder="e.g., Training Performance">
+                </div>
+            </div>
+            
+            <button class="collapsible" onclick="toggleCollapsible(this)">
+                📈 Upload Chart 2
+            </button>
+            <div class="collapsible-content">
+                <textarea id="userChartData2" rows="6" placeholder="Paste CSV for Chart 2..."></textarea>
+                <div class="input-group" style="margin-top: 10px;">
+                    <label>Chart Type</label>
+                    <select id="userChartType2">
+                        <option value="bar">Bar Chart</option>
+                        <option value="line">Line Chart</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label>Chart Title</label>
+                    <input type="text" id="userChartTitle2" placeholder="e.g., Model Comparison">
+                </div>
+            </div>
+            
+            <button class="collapsible" onclick="toggleCollapsible(this)">
+                📈 Upload Chart 3
+            </button>
+            <div class="collapsible-content">
+                <textarea id="userChartData3" rows="6" placeholder="Paste CSV for Chart 3..."></textarea>
+                <div class="input-group" style="margin-top: 10px;">
+                    <label>Chart Type</label>
+                    <select id="userChartType3">
+                        <option value="bar">Bar Chart</option>
+                        <option value="line">Line Chart</option>
+                    </select>
+                </div>
+                <div class="input-group">
+                    <label>Chart Title</label>
+                    <input type="text" id="userChartTitle3" placeholder="e.g., Detection Rates">
+                </div>
+            </div>
+            
+            <div class="info-box success" style="margin-top: 20px;">
+                ℹ️ After uploading data, go to "Generate Paper" tab!
             </div>
         </div>
         
@@ -336,8 +559,80 @@
         <div id="output"></div>
     </div>
 
+    <div id="titleModal">
+        <div class="modal-content">
+            <h3 style="margin: 0 0 20px 0; color: #667eea;">✨ AI-Generated Title Suggestions</h3>
+            <div id="titleOptions"></div>
+            <button onclick="closeTitleModal()" style="background: #6c757d; margin-top: 10px;">Close</button>
+        </div>
+    </div>
+
     <script>
+        let suggestedTitles = [];
         let currentPaper = null;
+        let authorCount = 0;
+        
+        // Initialize with one author
+        document.addEventListener('DOMContentLoaded', function() {
+            addAuthor();
+        });
+        
+        function addAuthor() {
+            authorCount++;
+            const container = document.getElementById('authorsContainer');
+            const authorDiv = document.createElement('div');
+            authorDiv.className = 'author-entry';
+            authorDiv.id = `author-${authorCount}`;
+            
+            authorDiv.innerHTML = `
+                <div class="author-entry-header">
+                    <strong>👤 Author ${authorCount}</strong>
+                    ${authorCount > 1 ? `<button class="remove-author-btn" onclick="removeAuthor(${authorCount})">✕ Remove</button>` : ''}
+                </div>
+                <div class="grid-2">
+                    <div class="input-group">
+                        <label>Name *</label>
+                        <input type="text" id="authorName${authorCount}" placeholder="Full Name" value="${authorCount === 1 ? 'Student Researcher' : ''}">
+                    </div>
+                    <div class="input-group">
+                        <label>Email *</label>
+                        <input type="email" id="authorEmail${authorCount}" placeholder="email@university.edu" value="${authorCount === 1 ? 'student@university.edu' : ''}">
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Affiliation *</label>
+                    <input type="text" id="authorAffiliation${authorCount}" placeholder="Department, University" value="${authorCount === 1 ? 'Department of CS, University' : ''}">
+                </div>
+            `;
+            
+            container.appendChild(authorDiv);
+        }
+        
+        function removeAuthor(id) {
+            const authorDiv = document.getElementById(`author-${id}`);
+            if (authorDiv) {
+                authorDiv.remove();
+            }
+        }
+        
+        function getAuthors() {
+            const authors = [];
+            const container = document.getElementById('authorsContainer');
+            const authorDivs = container.querySelectorAll('.author-entry');
+            
+            authorDivs.forEach((div) => {
+                const id = div.id.split('-')[1];
+                const name = document.getElementById(`authorName${id}`)?.value.trim();
+                const email = document.getElementById(`authorEmail${id}`)?.value.trim();
+                const affiliation = document.getElementById(`authorAffiliation${id}`)?.value.trim();
+                
+                if (name && email && affiliation) {
+                    authors.push({ name, email, affiliation });
+                }
+            });
+            
+            return authors;
+        }
         
         function switchTab(tab) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -346,18 +641,53 @@
             document.getElementById(tab + '-tab').classList.add('active');
         }
         
+        function toggleCollapsible(element) {
+            element.classList.toggle('active');
+            const content = element.nextElementSibling;
+            if (content.style.display === "block") {
+                content.style.display = "none";
+            } else {
+                content.style.display = "block";
+            }
+        }
+        
         async function generatePaper() {
             const topic = document.getElementById('topic').value.trim();
-            const authorName = document.getElementById('authorName').value.trim();
-            const email = document.getElementById('email').value.trim();
-            const affiliation = document.getElementById('affiliation').value.trim();
+            const authors = getAuthors();
+            const useRAG = document.getElementById('useRAG').checked;
+            const userTableData = document.getElementById('userTableData').value.trim();
+            
+            const userCharts = [];
+            for (let i = 1; i <= 3; i++) {
+                const chartDataElem = document.getElementById(`userChartData${i}`);
+                const chartTypeElem = document.getElementById(`userChartType${i}`);
+                const chartTitleElem = document.getElementById(`userChartTitle${i}`);
+                
+                if (chartDataElem && chartDataElem.value.trim()) {
+                    userCharts.push({
+                        data: chartDataElem.value.trim(),
+                        type: chartTypeElem ? chartTypeElem.value : 'bar',
+                        title: chartTitleElem ? chartTitleElem.value.trim() : `Chart ${i}`
+                    });
+                }
+            }
             
             if (!topic) {
-                alert('⚠️ Please enter a research topic');
+                alert('⚠️ Please enter a research topic or description');
                 return;
             }
             
-            showLoading(true, '⚡ Generating your paper...');
+            if (authors.length === 0) {
+                alert('⚠️ Please add at least one author');
+                return;
+            }
+            
+            const wordCount = topic.split(' ').length;
+            let loadingMsg = '⚡ Generating paper...';
+            if (wordCount > 10) loadingMsg = '🎯 Generating title and paper...';
+            if (useRAG) loadingMsg = '🔍 Retrieving research papers...';
+            
+            showLoading(true, loadingMsg);
             
             try {
                 const response = await fetch('/api/generate-paper', {
@@ -365,27 +695,112 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         topic: topic,
-                        author_name: authorName,
-                        email: email,
-                        affiliation: affiliation
+                        authors: authors,
+                        use_rag: useRAG,
+                        user_table_data: userTableData,
+                        user_charts: userCharts
                     })
                 });
                 
                 const data = await response.json();
-                console.log('Response:', data);
                 
                 if (data.success && data.paper) {
                     currentPaper = data.paper;
+                    
+                    const titleHint = document.getElementById('titleHint');
+                    if (titleHint && data.paper.title !== data.paper.original_input) {
+                        titleHint.innerHTML = `✨ AI generated title: "<strong>${data.paper.title}</strong>"`;
+                        titleHint.style.color = '#667eea';
+                        titleHint.style.fontWeight = '600';
+                        
+                        setTimeout(() => {
+                            titleHint.innerHTML = '💡 AI will auto-generate a title if you provide a description';
+                            titleHint.style.color = '#666';
+                            titleHint.style.fontWeight = 'normal';
+                        }, 5000);
+                    }
+                    
                     displayPaper(data.paper);
                 } else {
                     alert('❌ Error: ' + (data.error || 'Unknown error'));
                 }
             } catch (error) {
                 alert('❌ Error: ' + error.message);
-                console.error(error);
             } finally {
                 showLoading(false);
             }
+        }
+        
+        async function regenerateTitles() {
+            const description = document.getElementById('topic').value.trim();
+            
+            if (!description) {
+                alert('⚠️ Please enter a topic or description first');
+                return;
+            }
+            
+            showLoading(true, '✨ Generating title suggestions...');
+            
+            try {
+                const response = await fetch('/api/regenerate-titles', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ description: description })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.titles && data.titles.length > 0) {
+                    suggestedTitles = data.titles;
+                    showTitleModal(data.titles);
+                } else {
+                    alert('❌ Failed to generate titles');
+                }
+            } catch (error) {
+                alert('❌ Error: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        function showTitleModal(titles) {
+            const modal = document.getElementById('titleModal');
+            const optionsDiv = document.getElementById('titleOptions');
+            
+            let html = '';
+            titles.forEach((title, index) => {
+                html += `
+                    <div style="padding: 15px; margin: 10px 0; background: #f8f9fa; border-radius: 8px; border-left: 4px solid #667eea; cursor: pointer; transition: all 0.2s;" 
+                         onclick="selectTitle(${index})"
+                         onmouseover="this.style.background='#e3f2fd'"
+                         onmouseout="this.style.background='#f8f9fa'">
+                        <strong style="color: #667eea;">Option ${index + 1}:</strong><br/>
+                        <span style="font-size: 16px; color: #333;">${title}</span>
+                    </div>
+                `;
+            });
+            
+            optionsDiv.innerHTML = html;
+            modal.style.display = 'flex';
+        }
+        
+        function selectTitle(index) {
+            const selectedTitle = suggestedTitles[index];
+            document.getElementById('topic').value = selectedTitle;
+            closeTitleModal();
+            
+            const hint = document.getElementById('titleHint');
+            hint.innerHTML = '✅ Title selected!';
+            hint.style.color = '#28a745';
+            
+            setTimeout(() => {
+                hint.innerHTML = '💡 AI will auto-generate a title if you provide a description';
+                hint.style.color = '#666';
+            }, 3000);
+        }
+        
+        function closeTitleModal() {
+            document.getElementById('titleModal').style.display = 'none';
         }
         
         async function extractText() {
@@ -436,12 +851,31 @@
         function displayPaper(paper) {
             const output = document.getElementById('output');
             
+            let ragBadge = paper.rag_enabled ? 
+                `<span class="badge new" style="margin-left: 10px;">🔍 RAG-Enhanced</span>` : '';
+            
+            // Build authors display (IEEE format)
+            let authorsHtml = '';
+            if (paper.authors && paper.authors.length > 0) {
+                paper.authors.forEach((author, idx) => {
+                    authorsHtml += `
+                        <div class="author-block">
+                            <div class="author-name">${author.name}</div>
+                            <div class="author-affiliation">${author.affiliation}</div>
+                            <div class="author-email">${author.email}</div>
+                        </div>
+                    `;
+                });
+            }
+            
             let html = `
                 <div class="paper-header">
-                    <div class="paper-title">${paper.title || 'Research Paper'}</div>
-                    <div style="margin-top: 8px; opacity: 0.9;">
-                        👤 ${paper.author || 'Author'} | 🏛️ ${paper.affiliation || 'Institution'}<br/>
-                        📧 ${paper.email || 'N/A'} | 🔗 DOI: ${paper.doi || 'N/A'}
+                    <div class="paper-title">${paper.title || 'Research Paper'} ${ragBadge}</div>
+                    <div class="authors-list">
+                        ${authorsHtml}
+                    </div>
+                    <div style="text-align: center; margin-top: 15px; opacity: 0.9;">
+                        🔗 DOI: ${paper.doi || 'N/A'}
                     </div>
                     <div class="paper-meta">
                         <div class="meta-card">
@@ -459,6 +893,10 @@
                         <div class="meta-card">
                             <div class="meta-value">${paper.metadata?.has_figures || 0}</div>
                             <div class="meta-label">FIGURES</div>
+                        </div>
+                        <div class="meta-card">
+                            <div class="meta-value">${paper.metadata?.rag_papers_used || 0}</div>
+                            <div class="meta-label">RAG PAPERS</div>
                         </div>
                     </div>
                 </div>
@@ -486,11 +924,10 @@
             
             sections.forEach(key => {
                 if (paper.sections && paper.sections[key]) {
-                    const content = paper.sections[key].toString();
                     html += `
                         <div class="section">
                             <h3>${titles[key]}</h3>
-                            <div class="section-content">${content}</div>
+                            <div class="section-content">${paper.sections[key]}</div>
                         </div>
                     `;
                 }
@@ -499,37 +936,32 @@
             if (paper.figures) {
                 html += '<div class="section"><h3>Figures and Tables</h3>';
                 
-                if (paper.figures.figure1) {
-                    html += `
-                        <div class="figure-container">
-                            <img src="data:image/png;base64,${paper.figures.figure1.data}" alt="Figure 1">
-                            <div class="figure-caption">${paper.figures.figure1.caption}</div>
-                        </div>
-                    `;
-                }
+                Object.keys(paper.figures).forEach(key => {
+                    if (key.startsWith('figure')) {
+                        html += `
+                            <div class="figure-container">
+                                <img src="data:image/png;base64,${paper.figures[key].data}" alt="${key}">
+                                <div class="figure-caption">${paper.figures[key].caption}</div>
+                            </div>
+                        `;
+                    }
+                });
                 
-                if (paper.figures.table1) {
-                    html += '<table>';
-                    paper.figures.table1.data.forEach((row, idx) => {
-                        html += '<tr>';
-                        row.forEach(cell => {
-                            const tag = idx === 0 ? 'th' : 'td';
-                            html += `<${tag}>${cell}</${tag}>`;
+                Object.keys(paper.figures).forEach(key => {
+                    if (key.startsWith('table')) {
+                        html += '<table>';
+                        paper.figures[key].data.forEach((row, idx) => {
+                            html += '<tr>';
+                            row.forEach(cell => {
+                                const tag = idx === 0 ? 'th' : 'td';
+                                html += `<${tag}>${cell}</${tag}>`;
+                            });
+                            html += '</tr>';
                         });
-                        html += '</tr>';
-                    });
-                    html += '</table>';
-                    html += `<div class="figure-caption">${paper.figures.table1.caption}</div>`;
-                }
-                
-                if (paper.figures.figure2) {
-                    html += `
-                        <div class="figure-container">
-                            <img src="data:image/png;base64,${paper.figures.figure2.data}" alt="Figure 2">
-                            <div class="figure-caption">${paper.figures.figure2.caption}</div>
-                        </div>
-                    `;
-                }
+                        html += '</table>';
+                        html += `<div class="figure-caption">${paper.figures[key].caption}</div>`;
+                    }
+                });
                 
                 html += '</div>';
             }
@@ -555,14 +987,10 @@
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `IEEE_Paper_${Date.now()}.pdf`;
-                    document.body.appendChild(a);
+                    a.download = `Paper_${Date.now()}.pdf`;
                     a.click();
-                    document.body.removeChild(a);
                     URL.revokeObjectURL(url);
                     alert('✅ PDF downloaded!');
-                } else {
-                    alert('❌ PDF failed');
                 }
             } catch (error) {
                 alert('❌ ' + error.message);
@@ -588,13 +1016,9 @@
                     const a = document.createElement('a');
                     a.href = url;
                     a.download = `Paper_${Date.now()}.docx`;
-                    document.body.appendChild(a);
                     a.click();
-                    document.body.removeChild(a);
                     URL.revokeObjectURL(url);
                     alert('✅ DOCX downloaded!');
-                } else {
-                    alert('❌ DOCX failed');
                 }
             } catch (error) {
                 alert('❌ ' + error.message);
@@ -604,61 +1028,43 @@
         }
         
         async function checkPlagiarism() {
-    if (!currentPaper) return;
-    showLoading(true, '🔍 Checking plagiarism...');
-    
-    try {
-        const response = await fetch('/api/plagiarism-check', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ paper: currentPaper })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            const r = data.plagiarism_check;
+            if (!currentPaper) return;
+            showLoading(true, '🔍 Checking...');
             
-            let message = `📊 Plagiarism Analysis\n\n`;
-            message += `Provider: ${r.api_provider}\n`;
-            message += `Uniqueness Score: ${r.uniqueness_score}%\n`;
-            message += `Status: ${r.status}\n\n`;
-            
-            if (r.is_authentic) {
-                message += `✓ Real web-based checking\n`;
-                message += `Sources Found: ${r.sources_found || 0}\n`;
-            } else {
-                message += `ℹ️ Local analysis (enhanced)\n`;
-                message += `Vocabulary Diversity: ${r.vocabulary_diversity}%\n`;
+            try {
+                const response = await fetch('/api/plagiarism-check', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ paper: currentPaper })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const r = data.plagiarism_check;
+                    alert(`Uniqueness: ${r.uniqueness_score}%\nStatus: ${r.status}\nVocabulary: ${r.vocabulary_diversity}%`);
+                }
+            } catch (error) {
+                alert('❌ ' + error.message);
+            } finally {
+                showLoading(false);
             }
-            
-            message += `\nTotal Sentences: ${r.total_sentences}`;
-            
-            if (r.note) {
-                message += `\n\n${r.note}`;
-            }
-            
-            alert(message);
         }
-    } catch (error) {
-        alert('❌ ' + error.message);
-    } finally {
-        showLoading(false);
-    }
-}
-
         
         function copyText() {
             if (!currentPaper) return;
             
-            let text = `${currentPaper.title}\n\nAuthor: ${currentPaper.author}\nAffiliation: ${currentPaper.affiliation}\nEmail: ${currentPaper.email}\nDOI: ${currentPaper.doi}\n\n`;
+            let text = `${currentPaper.title}\n\n`;
+            currentPaper.authors.forEach(author => {
+                text += `${author.name}\n${author.affiliation}\n${author.email}\n\n`;
+            });
             
             Object.entries(currentPaper.sections).forEach(([key, content]) => {
                 text += `\n${key.toUpperCase()}\n${content}\n`;
             });
             
             navigator.clipboard.writeText(text).then(() => {
-                alert('✅ Copied to clipboard!');
+                alert('✅ Copied!');
             });
         }
     </script>

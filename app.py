@@ -1,18 +1,22 @@
 from flask import Flask, request, jsonify, render_template, send_file
 import requests
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 import uuid
 import re
+import time
 from io import BytesIO
-import concurrent.futures
 import hashlib
 import base64
+from typing import List, Dict
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import seaborn as sns
+from wordcloud import WordCloud
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
@@ -30,13 +34,15 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs('saved_papers', exist_ok=True)
 
+CACHE_DIR = 'paper_cache'
+os.makedirs(CACHE_DIR, exist_ok=True)
+
 print("Loading EasyOCR model...")
 reader = easyocr.Reader(['en'], gpu=False)
 print("EasyOCR loaded!")
 
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "mistral"
-WINSTON_API_KEY = "tpctrVgy31ssAG8iFX5kZlNITqzfAwfFAviPtzBT34b2c160" 
+MODEL_NAME = "qwen2.5:7b"
 
 CITATION_DATABASE = {
     "machine learning": [
@@ -45,10 +51,6 @@ CITATION_DATABASE = {
         "[3] T. Mitchell, Machine Learning. McGraw-Hill, 1997.",
         "[4] Y. LeCun, Y. Bengio, and G. Hinton, \"Deep learning,\" Nature, vol. 521, pp. 436-444, 2015.",
         "[5] A. Ng, \"Machine Learning Yearning,\" Technical Strategy, 2018."
-    ],
-    "neural networks": [
-        "[1] G. Hinton et al., \"A fast learning algorithm for deep belief nets,\" Neural Comp., vol. 18, 2006.",
-        "[2] A. Krizhevsky et al., \"ImageNet classification with deep CNNs,\" in Proc. NIPS, 2012."
     ],
     "default": [
         "[1] A. Author, B. Author, \"Title of Paper,\" Journal Name, vol. X, no. Y, pp. ZZ-ZZ, 2023.",
@@ -59,33 +61,532 @@ CITATION_DATABASE = {
     ]
 }
 
-def generate_text(prompt, max_tokens=400, temperature=0.7):
+# ==================== RAG FUNCTIONS ====================
+
+def get_cache_key(query: str) -> str:
+    return hashlib.md5(query.lower().encode()).hexdigest()
+
+def load_from_cache(query: str, max_age_hours: int = 24) -> List[Dict]:
+    cache_key = get_cache_key(query)
+    cache_file = os.path.join(CACHE_DIR, f"{cache_key}.json")
+    
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'r') as f:
+                cache_data = json.load(f)
+            
+            cached_time = datetime.fromisoformat(cache_data['timestamp'])
+            if datetime.now() - cached_time < timedelta(hours=max_age_hours):
+                age_hours = (datetime.now() - cached_time).seconds // 3600
+                print(f"✅ Using cached papers (age: {age_hours}h)")
+                return cache_data['papers']
+        except Exception as e:
+            print(f"⚠️ Cache error: {e}")
+    
+    return None
+
+def save_to_cache(query: str, papers: List[Dict]):
+    cache_key = get_cache_key(query)
+    cache_file = os.path.join(CACHE_DIR, f"{cache_key}.json")
+    
+    try:
+        cache_data = {
+            'timestamp': datetime.now().isoformat(),
+            'query': query,
+            'papers': papers
+        }
+        with open(cache_file, 'w') as f:
+            json.dump(cache_data, f)
+        print(f"💾 Cached {len(papers)} papers")
+    except Exception as e:
+        print(f"⚠️ Cache save error: {e}")
+
+def search_semantic_scholar(query: str, limit: int = 5) -> List[Dict]:
+    cached_papers = load_from_cache(query)
+    if cached_papers is not None:
+        return cached_papers
+    
+    print(f"🔍 Searching Semantic Scholar: {query[:50]}...")
+    
+    url = "https://api.semanticscholar.org/graph/v1/paper/search"
+    params = {
+        'query': query,
+        'limit': limit,
+        'fields': 'title,abstract,authors,year,citationCount,paperId,venue,externalIds'
+    }
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = requests.get(url, params=params, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                papers = data.get('data', [])
+                valid_papers = [p for p in papers if p.get('abstract')][:limit]
+                
+                if valid_papers:
+                    print(f"✅ Found {len(valid_papers)} papers")
+                    save_to_cache(query, valid_papers)
+                    return valid_papers
+                else:
+                    print(f"⚠️ No papers with abstracts")
+                    return []
+                    
+            elif response.status_code == 429:
+                wait_time = (2 ** attempt) * 5
+                print(f"⚠️ Rate limited. Waiting {wait_time}s (retry {attempt + 1}/{max_retries})...")
+                time.sleep(wait_time)
+                
+            else:
+                print(f"⚠️ API error {response.status_code}")
+                if attempt < max_retries - 1:
+                    time.sleep(3)
+                    
+        except Exception as e:
+            print(f"❌ Error: {str(e)[:100]}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+    
+    print("❌ Failed after retries")
+    return []
+
+def format_paper_context(papers: List[Dict]) -> str:
+    if not papers:
+        return ""
+    
+    context = "=== RESEARCH CONTEXT ===\n\n"
+    
+    for i, paper in enumerate(papers, 1):
+        title = paper.get('title', 'Unknown')
+        abstract = paper.get('abstract', '')[:400]
+        authors = paper.get('authors', [])
+        year = paper.get('year', 'N/A')
+        citations = paper.get('citationCount', 0)
+        
+        author_names = ', '.join([a.get('name', '') for a in authors[:3]])
+        if len(authors) > 3:
+            author_names += ' et al.'
+        
+        context += f"Paper {i}: {title}\n"
+        context += f"Authors: {author_names} ({year})\n"
+        context += f"Citations: {citations}\n"
+        context += f"Summary: {abstract}\n\n"
+    
+    return context
+
+def generate_ieee_citations(papers: List[Dict]) -> List[str]:
+    citations = []
+    
+    for i, paper in enumerate(papers, 1):
+        title = paper.get('title', 'Unknown Title')
+        authors = paper.get('authors', [])
+        year = paper.get('year', 'N/A')
+        venue = paper.get('venue', 'Journal/Conference')
+        
+        author_list = []
+        for author in authors[:3]:
+            name = author.get('name', '')
+            parts = name.split()
+            if len(parts) >= 2:
+                formatted = f"{parts[0][0]}. {' '.join(parts[1:])}"
+                author_list.append(formatted)
+        
+        if len(authors) > 3:
+            author_str = ', '.join(author_list) + ', et al.'
+        elif len(author_list) > 1:
+            author_str = ', '.join(author_list[:-1]) + ' and ' + author_list[-1]
+        else:
+            author_str = author_list[0] if author_list else 'Unknown'
+        
+        external_ids = paper.get('externalIds', {})
+        doi = external_ids.get('DOI', '')
+        
+        citation = f"[{i}] {author_str}, \"{title},\" {venue}, {year}"
+        if doi:
+            citation += f", doi: {doi}"
+        citation += "."
+        
+        citations.append(citation)
+    
+    return citations
+
+def get_fallback_context(topic: str) -> str:
+    return f"""Based on research in {topic}, consider:
+- Recent developments and state-of-the-art
+- Common methodologies and frameworks
+- Key challenges and research questions
+- Practical applications
+"""
+
+# ==================== TITLE GENERATION ====================
+
+def generate_paper_title(description: str, retries: int = 2) -> str:
+    prompt = f"""You are an academic title expert. Generate a professional, concise research paper title from this description.
+
+Description: {description}
+
+Requirements:
+- Maximum 12 words
+- Academic and professional tone
+- Capture the core research focus
+- Use proper capitalization
+- NO quotation marks
+- Format: "Topic: Subtitle" or "Method for Application"
+
+Generate ONLY the title, nothing else."""
+
+    for attempt in range(retries):
+        try:
+            print(f"📝 Generating title (attempt {attempt + 1}/{retries})...")
+            
+            response = requests.post(OLLAMA_API_URL, json={
+                "model": MODEL_NAME,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "num_predict": 50,
+                    "temperature": 0.8,
+                    "top_p": 0.9
+                }
+            }, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                title = result.get('response', '').strip()
+                
+                title = title.replace('"', '').replace("'", '').strip()
+                title = re.sub(r'^Title:\s*', '', title, flags=re.IGNORECASE)
+                
+                words = title.split()
+                if len(words) > 15:
+                    title = ' '.join(words[:15])
+                
+                if title and len(title) > 10:
+                    print(f"✅ Generated title: {title}")
+                    return title
+                    
+            if attempt < retries - 1:
+                time.sleep(2)
+                
+        except Exception as e:
+            print(f"⚠️ Title generation error: {e}")
+            if attempt < retries - 1:
+                time.sleep(2)
+    
+    words = description.split()[:10]
+    fallback = ' '.join(words).strip()
+    if fallback.endswith(','):
+        fallback = fallback[:-1]
+    return fallback
+
+def generate_alternative_titles(original_description: str, count: int = 3) -> list:
+    prompt = f"""You are an academic title expert. Generate {count} different professional research paper titles from this description.
+
+Description: {original_description}
+
+Requirements for EACH title:
+- Maximum 12 words
+- Academic tone
+- Different angles/perspectives
+- NO quotation marks
+- NO numbering
+
+Generate exactly {count} titles, one per line."""
+
     try:
         response = requests.post(OLLAMA_API_URL, json={
             "model": MODEL_NAME,
             "prompt": prompt,
             "stream": False,
             "options": {
-                "num_predict": max_tokens,
-                "temperature": temperature,
-                "top_p": 0.9,
-                "top_k": 40
+                "num_predict": 150,
+                "temperature": 0.9,
+                "top_p": 0.95
             }
-        }, timeout=150)
+        }, timeout=40)
         
         if response.status_code == 200:
             result = response.json()
-            return result.get('response', '').strip()
-        return "Error: Could not generate text"
+            text = result.get('response', '').strip()
+            
+            titles = []
+            for line in text.split('\n'):
+                line = line.strip()
+                line = re.sub(r'^[\d\.\-\*\)]+\s*', '', line)
+                line = line.replace('"', '').replace("'", '').strip()
+                
+                if line and len(line) > 10 and len(line.split()) <= 15:
+                    titles.append(line)
+            
+            return titles[:count] if titles else []
     except Exception as e:
-        return f"Error: {str(e)}"
+        print(f"⚠️ Alternative titles error: {e}")
+    
+    return []
 
-def generate_section(section_name, prompt, max_tokens=400):
+# ==================== DYNAMIC FIGURE GENERATION ====================
+
+def extract_keywords_from_text(text: str, top_n: int = 10) -> List[str]:
+    from collections import Counter
+    
+    stopwords = set(['the', 'a', 'an', 'in', 'on', 'at', 'for', 'to', 'of', 'and', 'is', 'are', 
+                     'this', 'that', 'with', 'from', 'by', 'as', 'or', 'be', 'been', 'has', 'have'])
+    
+    words = re.findall(r'\b[a-z]{4,}\b', text.lower())
+    filtered = [w for w in words if w not in stopwords]
+    
+    word_freq = Counter(filtered)
+    return [word for word, count in word_freq.most_common(top_n)]
+
+def generate_wordcloud_from_paper(paper_sections: Dict, topic: str) -> BytesIO:
     try:
-        result = generate_text(prompt, max_tokens=max_tokens)
-        return section_name, result if not result.startswith("Error") else "[Content generation failed]"
-    except:
-        return section_name, "[Error]"
+        print("📊 Generating word cloud...")
+        
+        full_text = ' '.join(paper_sections.values())
+        
+        wordcloud = WordCloud(
+            width=800, 
+            height=400,
+            background_color='white',
+            colormap='viridis',
+            max_words=50
+        ).generate(full_text)
+        
+        plt.figure(figsize=(10, 5))
+        plt.imshow(wordcloud, interpolation='bilinear')
+        plt.axis('off')
+        plt.title(f'Key Terms in "{topic}"', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+    except Exception as e:
+        print(f"⚠️ Word cloud error: {e}")
+        return None
+
+def generate_keyword_frequency_chart(paper_sections: Dict) -> BytesIO:
+    try:
+        print("📊 Generating keyword frequency chart...")
+        
+        full_text = ' '.join(paper_sections.values())
+        keywords = extract_keywords_from_text(full_text, top_n=10)
+        
+        from collections import Counter
+        words = re.findall(r'\b[a-z]{4,}\b', full_text.lower())
+        word_counts = Counter(words)
+        
+        top_words = [(word, word_counts[word]) for word in keywords]
+        words, counts = zip(*top_words) if top_words else ([], [])
+        
+        plt.figure(figsize=(10, 6))
+        bars = plt.barh(words, counts, color='steelblue', edgecolor='black', linewidth=0.7)
+        plt.xlabel('Frequency', fontsize=12, fontweight='bold')
+        plt.ylabel('Keywords', fontsize=12, fontweight='bold')
+        plt.title('Top 10 Keywords in Paper', fontsize=14, fontweight='bold')
+        plt.gca().invert_yaxis()
+        
+        for bar in bars:
+            width = bar.get_width()
+            plt.text(width + 1, bar.get_y() + bar.get_height()/2, 
+                    f'{int(width)}', ha='left', va='center', fontweight='bold', fontsize=10)
+        
+        plt.tight_layout()
+        
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+    except Exception as e:
+        print(f"⚠️ Keyword chart error: {e}")
+        return None
+
+def generate_metrics_table_from_rag(retrieved_papers: List[Dict]) -> List[List[str]]:
+    try:
+        print("📊 Generating metrics table from RAG papers...")
+        
+        if not retrieved_papers or len(retrieved_papers) < 2:
+            return generate_generic_table()
+        
+        table_data = [['Paper', 'Year', 'Citations', 'Method', 'Key Finding']]
+        
+        for i, paper in enumerate(retrieved_papers[:5], 1):
+            title = paper.get('title', 'Unknown')[:40] + '...'
+            year = str(paper.get('year', 'N/A'))
+            citations = str(paper.get('citationCount', 0))
+            
+            abstract = paper.get('abstract', '').lower()
+            if 'neural' in abstract or 'deep' in abstract:
+                method = 'Deep Learning'
+            elif 'machine learning' in abstract:
+                method = 'ML-based'
+            elif 'transformer' in abstract:
+                method = 'Transformer'
+            else:
+                method = 'Novel Approach'
+            
+            finding = f"{citations} citations"
+            
+            table_data.append([f"Paper {i}", year, citations, method, finding])
+        
+        return table_data
+    except Exception as e:
+        print(f"⚠️ Table generation error: {e}")
+        return generate_generic_table()
+
+def generate_generic_table() -> List[List[str]]:
+    return [
+        ['Method', 'Accuracy', 'Precision', 'Recall', 'F1-Score'],
+        ['Baseline', '72.3%', '71.5%', '70.8%', '71.1%'],
+        ['Method A', '78.6%', '77.2%', '79.1%', '78.1%'],
+        ['Method B', '81.4%', '80.8%', '82.3%', '81.5%'],
+        ['Proposed', '92.1%', '91.8%', '92.4%', '92.1%']
+    ]
+
+def process_user_table_data(csv_data: str) -> List[List[str]]:
+    try:
+        lines = csv_data.strip().split('\n')
+        table_data = [line.split(',') for line in lines]
+        return table_data
+    except Exception as e:
+        print(f"⚠️ User table processing error: {e}")
+        return []
+
+def generate_user_data_chart(csv_data: str, chart_type: str = 'bar') -> BytesIO:
+    try:
+        print(f"📊 Generating {chart_type} chart from user data...")
+        
+        df = pd.read_csv(BytesIO(csv_data.encode()))
+        
+        plt.figure(figsize=(10, 6))
+        
+        if chart_type == 'bar' and len(df.columns) >= 2:
+            df.plot(x=df.columns[0], y=df.columns[1], kind='bar', ax=plt.gca(), color='steelblue')
+            plt.xlabel(df.columns[0], fontweight='bold')
+            plt.ylabel(df.columns[1], fontweight='bold')
+            plt.title(f'{df.columns[1]} by {df.columns[0]}', fontweight='bold')
+            plt.xticks(rotation=45)
+            
+        elif chart_type == 'line' and len(df.columns) >= 2:
+            df.plot(x=df.columns[0], y=df.columns[1], kind='line', ax=plt.gca(), marker='o', color='steelblue')
+            plt.xlabel(df.columns[0], fontweight='bold')
+            plt.ylabel(df.columns[1], fontweight='bold')
+            plt.title(f'{df.columns[1]} over {df.columns[0]}', fontweight='bold')
+            plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        buf = BytesIO()
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+        
+        return buf
+    except Exception as e:
+        print(f"⚠️ User chart error: {e}")
+        return None
+
+# ==================== TEXT PROCESSING ====================
+
+def clean_generated_text(text, section_name, paper_title):
+    text = re.sub(r'^#+\s+.*$', '', text, flags=re.MULTILINE)
+    text = re.sub(re.escape(paper_title), '', text, flags=re.IGNORECASE)
+    
+    section_keywords = [
+        'Abstract', 'Introduction', 'Literature Review', 'Background',
+        'Methodology', 'Results', 'Discussion', 'Conclusion',
+        'References', 'Objectives', 'Problem Statement'
+    ]
+    
+    for keyword in section_keywords:
+        text = re.sub(rf'^{keyword}:?\s*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
+        text = re.sub(rf'^#+\s*{keyword}:?\s*$', '', text, flags=re.MULTILINE | re.IGNORECASE)
+    
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)
+    text = re.sub(r'^\s*[-*•]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*\d+\.\s+(?!\[)', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    
+    return text.strip()
+
+def generate_text_with_context(prompt, context="", max_tokens=400, temperature=0.7, retries=2):
+    if context:
+        full_prompt = f"""You are a professional academic writer. Rules:
+1. Write ONLY content, no headers
+2. No markdown formatting
+3. Continuous prose paragraphs
+4. Academic tone
+5. USE RESEARCH CONTEXT provided
+
+{context}
+
+Based on this context:
+{prompt}"""
+    else:
+        full_prompt = f"""You are a professional academic writer. Rules:
+1. Write ONLY content, no headers
+2. No markdown formatting
+3. Continuous prose paragraphs
+4. Academic tone
+
+{prompt}"""
+    
+    for attempt in range(retries):
+        try:
+            print(f"📤 Generating with {'context' if context else 'no context'} (attempt {attempt + 1}/{retries})...")
+            
+            response = requests.post(OLLAMA_API_URL, json={
+                "model": MODEL_NAME,
+                "prompt": full_prompt,
+                "stream": False,
+                "options": {
+                    "num_predict": max_tokens,
+                    "temperature": temperature,
+                    "top_p": 0.9,
+                    "top_k": 40
+                }
+            }, timeout=300)
+            
+            print(f"   Response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                result = response.json()
+                generated = result.get('response', '').strip()
+                print(f"✅ Generated {len(generated.split())} words")
+                return generated
+            else:
+                print(f"❌ HTTP {response.status_code} on attempt {attempt + 1}")
+                if attempt < retries - 1:
+                    wait = 3
+                    print(f"⏳ Waiting {wait}s before retry...")
+                    time.sleep(wait)
+                else:
+                    error_text = response.text[:200] if hasattr(response, 'text') else 'Unknown error'
+                    return f"Error: HTTP {response.status_code} - {error_text}"
+                
+        except requests.exceptions.Timeout:
+            print(f"⏱️ Timeout on attempt {attempt + 1}")
+            if attempt < retries - 1:
+                print(f"⏳ Retrying...")
+                time.sleep(2)
+            else:
+                return "Error: Request timeout"
+        except Exception as e:
+            print(f"❌ Exception on attempt {attempt + 1}: {type(e).__name__}")
+            if attempt < retries - 1:
+                print(f"⏳ Retrying...")
+                time.sleep(2)
+            else:
+                return f"Error: {str(e)}"
+    
+    return "Error: All retries failed"
 
 def extract_text_from_image(image_path):
     try:
@@ -107,101 +608,22 @@ def extract_text_from_image(image_path):
         return f"OCR Error: {str(e)}"
 
 def check_plagiarism(text):
-    """Enhanced plagiarism check with Winston AI and local fallback"""
-    
-    # Try Winston AI first if API key is available
-    if WINSTON_API_KEY:
-        try:
-            print("🔍 Checking plagiarism with Winston AI...")
-            
-            # Limit to first 5000 words to save credits
-            text_to_check = ' '.join(text.split()[:5000])
-            
-            response = requests.post(
-                "https://api.gowinston.ai/v1/plagiarism",
-                headers={
-                    "Authorization": f"Bearer {WINSTON_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "text": text_to_check,
-                    "language": "en"
-                },
-                timeout=60
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                plagiarism_pct = data.get("plagiarism_percentage", 0)
-                
-                print(f"✓ Winston AI: {100 - plagiarism_pct}% unique")
-                
-                return {
-                    "uniqueness_score": round(100 - plagiarism_pct, 1),
-                    "plagiarism_percentage": plagiarism_pct,
-                    "status": "Highly Original" if plagiarism_pct < 5 else 
-                             "Original" if plagiarism_pct < 15 else 
-                             "Needs Review",
-                    "sources_found": len(data.get("sources", [])),
-                    "total_sentences": len(text.split('.')),
-                    "api_provider": "Winston AI ✓",
-                    "is_authentic": True
-                }
-            else:
-                print(f"⚠ Winston API error: {response.status_code}")
-                
-        except requests.exceptions.Timeout:
-            print("⚠ Winston API timeout")
-        except Exception as e:
-            print(f"⚠ Winston API error: {e}")
-    
-    # Fallback to enhanced local checking
-    print("🔍 Using local plagiarism analysis...")
-    
     sentences = [s.strip() for s in text.split('.') if s.strip()]
     unique_sentences = len(set([s.lower() for s in sentences]))
     uniqueness = (unique_sentences / len(sentences) * 100) if sentences else 0
     
-    # Vocabulary diversity
     words = re.findall(r'\w+', text.lower())
     unique_words = len(set(words))
     vocabulary_score = (unique_words / len(words) * 100) if words else 0
     
-    # Common academic phrases detection
-    common_phrases = [
-        "in conclusion", "as a result", "however", "furthermore",
-        "this study", "research shows", "according to", "it is important",
-        "in addition", "on the other hand"
-    ]
-    common_count = sum(1 for phrase in common_phrases if phrase in text.lower())
-    
-    # Sentence length variance (AI text often uniform)
-    sentence_lengths = [len(s.split()) for s in sentences if s]
-    if sentence_lengths:
-        avg_length = sum(sentence_lengths) / len(sentence_lengths)
-        variance = sum((l - avg_length) ** 2 for l in sentence_lengths) / len(sentence_lengths)
-    else:
-        variance = 0
-    
-    # Calculate weighted score
-    final_score = (
-        uniqueness * 0.4 +
-        min(vocabulary_score, 100) * 0.3 +
-        min(100 - (common_count * 3), 100) * 0.2 +
-        min(variance * 1.5, 100) * 0.1
-    )
+    final_score = (uniqueness * 0.6 + min(vocabulary_score, 100) * 0.4)
     
     return {
         "uniqueness_score": round(final_score, 1),
         "status": "Highly Original" if final_score > 85 else "Original" if final_score > 70 else "Needs Review",
         "total_sentences": len(sentences),
         "unique_sentences": unique_sentences,
-        "vocabulary_diversity": round(vocabulary_score, 1),
-        "common_phrases_detected": common_count,
-        "avg_sentence_length": round(avg_length if sentence_lengths else 0, 1),
-        "api_provider": "Local Analysis (Enhanced)",
-        "is_authentic": False,
-        "note": "For production use, add Winston API key for real web-based checking"
+        "vocabulary_diversity": round(vocabulary_score, 1)
     }
 
 def get_citations(topic):
@@ -214,60 +636,7 @@ def get_citations(topic):
 def generate_doi():
     return f"10.1109/ACCESS.{datetime.now().year}.{uuid.uuid4().hex[:8].upper()}"
 
-def generate_sample_bar_chart(topic):
-    plt.figure(figsize=(6, 4))
-    categories = ['Method A', 'Method B', 'Method C', 'Method D', 'Proposed']
-    values = [72, 78, 81, 85, 92]
-    colors_list = ['#667eea', '#764ba2', '#f093fb', '#f5576c', '#28a745']
-    
-    plt.bar(categories, values, color=colors_list, alpha=0.8, edgecolor='black', linewidth=0.7)
-    plt.xlabel('Approaches', fontsize=11, fontweight='bold')
-    plt.ylabel('Accuracy (%)', fontsize=11, fontweight='bold')
-    plt.title(f'Performance Comparison', fontsize=12, fontweight='bold')
-    plt.ylim(0, 100)
-    plt.grid(axis='y', alpha=0.3, linestyle='--')
-    
-    for i, v in enumerate(values):
-        plt.text(i, v + 2, f'{v}%', ha='center', fontweight='bold', fontsize=9)
-    
-    plt.tight_layout()
-    buf = BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-    buf.seek(0)
-    plt.close()
-    return buf
-
-def generate_sample_line_chart(topic):
-    plt.figure(figsize=(6, 4))
-    epochs = np.arange(1, 11)
-    train_acc = 65 + 20 * (1 - np.exp(-epochs/3)) + np.random.uniform(-2, 2, 10)
-    val_acc = 60 + 18 * (1 - np.exp(-epochs/3)) + np.random.uniform(-2, 2, 10)
-    
-    plt.plot(epochs, train_acc, marker='o', linewidth=2, label='Training', color='#667eea', markersize=6)
-    plt.plot(epochs, val_acc, marker='s', linewidth=2, label='Validation', color='#f5576c', markersize=6)
-    
-    plt.xlabel('Epoch', fontsize=11, fontweight='bold')
-    plt.ylabel('Accuracy (%)', fontsize=11, fontweight='bold')
-    plt.title(f'Training Progress', fontsize=12, fontweight='bold')
-    plt.legend(loc='lower right', fontsize=10)
-    plt.grid(True, alpha=0.3, linestyle='--')
-    plt.ylim(50, 95)
-    
-    plt.tight_layout()
-    buf = BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
-    buf.seek(0)
-    plt.close()
-    return buf
-
-def create_sample_table_data(topic):
-    return [
-        ['Method', 'Accuracy', 'Precision', 'Recall', 'F1-Score'],
-        ['Baseline', '72.3%', '71.5%', '70.8%', '71.1%'],
-        ['Method A', '78.6%', '77.2%', '79.1%', '78.1%'],
-        ['Method B', '81.4%', '80.8%', '82.3%', '81.5%'],
-        ['Proposed', '92.1%', '91.8%', '92.4%', '92.1%']
-    ]
+# ==================== ROUTES ====================
 
 @app.route('/')
 def home():
@@ -276,90 +645,242 @@ def home():
 @app.route('/api/generate-paper', methods=['POST'])
 def generate_paper():
     data = request.json
-    topic = data.get('topic', '')
-    author_name = data.get('author_name', 'Author Name')
-    affiliation = data.get('affiliation', 'University Name')
-    email = data.get('email', 'author@university.edu')
+    topic_or_description = data.get('topic', '')
+    authors = data.get('authors', [])  # Array of author objects
+    use_rag = data.get('use_rag', True)
+    user_table_csv = data.get('user_table_data', '')
+    user_charts = data.get('user_charts', [])
     
-    if not topic:
+    if not topic_or_description:
         return jsonify({"success": False, "error": "Topic required"}), 400
     
+    # Ensure at least one author
+    if not authors or len(authors) == 0:
+        authors = [{
+            "name": "Author Name",
+            "email": "author@university.edu",
+            "affiliation": "University Name"
+        }]
+    
+    # Generate title
+    print(f"📝 Input: {topic_or_description[:100]}...")
+    
+    word_count = len(topic_or_description.split())
+    if word_count > 10 or len(topic_or_description) > 80:
+        print("🎯 Detected description, generating title...")
+        paper_title = generate_paper_title(topic_or_description)
+        research_topic = topic_or_description
+    else:
+        print("🎯 Using input as title...")
+        paper_title = topic_or_description
+        research_topic = topic_or_description
+    
     paper = {
-        "title": topic,
-        "author": author_name,
-        "affiliation": affiliation,
-        "email": email,
+        "title": paper_title,
+        "original_input": topic_or_description,
+        "authors": authors,  # Store multiple authors
         "doi": generate_doi(),
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "sections": {},
         "metadata": {},
-        "figures": {}
+        "figures": {},
+        "rag_enabled": use_rag
     }
     
-    prompts = {
-        "abstract": (f"""Write a 180-word abstract for: "{topic}". Include: background, objective, methods, results, conclusion.""", 280),
-        "introduction": (f"""Write 350-word Introduction for: "{topic}". Cover: context, problem, objectives, structure.""", 450),
-        "literature_review": (f"""Write 350-word Literature Review for: "{topic}". Discuss: key research, gaps.""", 450),
-        "methodology": (f"""Write 350-word Methodology for: "{topic}". Include: design, data collection, analysis.""", 450),
-        "results": (f"""Write 300-word Results for: "{topic}". Mention Figure 1 shows comparison and Table 1 presents metrics.""", 400),
-        "discussion": (f"""Write 350-word Discussion for: "{topic}". Cover: interpretation, implications, limitations.""", 450),
-        "conclusion": (f"""Write 250-word Conclusion for: "{topic}". Summarize findings and future work.""", 350),
-    }
+    print(f"\n{'='*70}")
+    print(f"⚡ GENERATION")
+    print(f"Title: {paper_title}")
+    print(f"Authors: {len(authors)}")
+    print(f"RAG: {'Enabled' if use_rag else 'Disabled'}")
+    print(f"{'='*70}\n")
     
-    print(f"⚡ Starting generation: {topic}")
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
-        future_to_section = {
-            executor.submit(generate_section, key, prompt, tokens): key 
-            for key, (prompt, tokens) in prompts.items()
-        }
-        
-        for future in concurrent.futures.as_completed(future_to_section):
-            section_key, result = future.result()
-            paper["sections"][section_key] = result
-            print(f"✓ {section_key}")
-    
-    print("📊 Generating figures...")
-    
+    # Warmup Ollama
+    print("🔥 Warming up Ollama...")
     try:
-        fig1_buf = generate_sample_bar_chart(topic)
-        fig1_base64 = base64.b64encode(fig1_buf.getvalue()).decode('utf-8')
-        paper["figures"]["figure1"] = {
-            "caption": "Figure 1: Performance comparison of different approaches",
-            "data": fig1_base64,
-            "type": "bar_chart"
-        }
+        warmup = requests.post(OLLAMA_API_URL, json={
+            "model": MODEL_NAME,
+            "prompt": "Test",
+            "stream": False,
+            "options": {"num_predict": 10}
+        }, timeout=30)
+        print("✅ Ollama ready\n" if warmup.status_code == 200 else "⚠️ Warmup issue\n")
+    except:
+        print("⚠️ Could not warm up Ollama\n")
+    
+    # RAG
+    retrieved_papers = []
+    research_context = ""
+    
+    if use_rag:
+        print("🔍 RAG: Fetching papers...")
+        retrieved_papers = search_semantic_scholar(research_topic, limit=3)
         
-        fig2_buf = generate_sample_line_chart(topic)
-        fig2_base64 = base64.b64encode(fig2_buf.getvalue()).decode('utf-8')
-        paper["figures"]["figure2"] = {
-            "caption": "Figure 2: Training and validation accuracy over epochs",
-            "data": fig2_base64,
-            "type": "line_chart"
-        }
+        if retrieved_papers:
+            research_context = format_paper_context(retrieved_papers)
+            print(f"✅ RAG: Using {len(retrieved_papers)} papers\n")
+        else:
+            print("⚠️ RAG: Using fallback context\n")
+            research_context = get_fallback_context(research_topic)
+    
+    # Generate sections
+    prompts = {
+        "abstract": (
+            f"Write a 180-word abstract for '{research_topic}'. Include background, objectives, methods, results, conclusion.",
+            300
+        ),
+        "introduction": (
+            f"Write a 350-word introduction for '{research_topic}'. Context, problem, objectives.",
+            450
+        ),
+        "literature_review": (
+            f"Write a 350-word literature review for '{research_topic}'. Discuss papers from context.",
+            450
+        ),
+        "methodology": (
+            f"Write a 350-word methodology for '{research_topic}'. Approach, design, methods.",
+            450
+        ),
+        "results": (
+            f"Write a 300-word results for '{research_topic}'. Present findings. Mention figures/tables.",
+            400
+        ),
+        "discussion": (
+            f"Write a 350-word discussion for '{research_topic}'. Interpret results, compare with context.",
+            450
+        ),
+        "conclusion": (
+            f"Write a 250-word conclusion for '{research_topic}'. Summary and future work.",
+            350
+        ),
+    }
+    
+    for section_name, (prompt, max_tokens) in prompts.items():
+        print(f"🔄 Generating {section_name}...")
+        
+        use_context = section_name in ['introduction', 'literature_review', 'discussion']
+        context = research_context if (use_rag and use_context) else ""
+        
+        result = None
+        for attempt in range(2):
+            result = generate_text_with_context(prompt, context=context, max_tokens=max_tokens)
+            
+            if result and not result.startswith("Error") and len(result) > 50:
+                break
+            else:
+                if attempt == 0:
+                    print(f"⚠️ Retrying {section_name}...")
+                    time.sleep(2)
+        
+        if result and not result.startswith("Error") and len(result) > 50:
+            cleaned_result = clean_generated_text(result, section_name, paper_title)
+            paper["sections"][section_name] = cleaned_result
+            print(f"✅ {section_name} - {len(cleaned_result.split())} words\n")
+        else:
+            print(f"❌ {section_name} FAILED\n")
+            paper["sections"][section_name] = f"[Content for {section_name}]"
+    
+    # Generate figures
+    print("📊 Generating figures...")
+    try:
+        wordcloud_buf = generate_wordcloud_from_paper(paper["sections"], paper_title)
+        if wordcloud_buf:
+            paper["figures"]["figure1"] = {
+                "caption": "Figure 1: Key terms",
+                "data": base64.b64encode(wordcloud_buf.getvalue()).decode('utf-8'),
+                "type": "wordcloud"
+            }
+        
+        keyword_chart_buf = generate_keyword_frequency_chart(paper["sections"])
+        if keyword_chart_buf:
+            paper["figures"]["figure2"] = {
+                "caption": "Figure 2: Keyword frequency",
+                "data": base64.b64encode(keyword_chart_buf.getvalue()).decode('utf-8'),
+                "type": "keyword_chart"
+            }
+        
+        if retrieved_papers:
+            table_data = generate_metrics_table_from_rag(retrieved_papers)
+        else:
+            table_data = generate_generic_table()
         
         paper["figures"]["table1"] = {
-            "caption": "Table 1: Comparative performance metrics",
-            "data": create_sample_table_data(topic),
+            "caption": "Table 1: Comparative analysis",
+            "data": table_data,
             "type": "table"
         }
         
-        print("✓ Figures generated")
+        if user_table_csv:
+            user_table = process_user_table_data(user_table_csv)
+            if user_table:
+                paper["figures"]["table2"] = {
+                    "caption": "Table 2: Experimental results",
+                    "data": user_table,
+                    "type": "table"
+                }
+        
+        figure_num = 3
+        for idx, chart_info in enumerate(user_charts):
+            try:
+                chart_data = chart_info.get('data', '')
+                chart_type = chart_info.get('type', 'bar')
+                chart_title = chart_info.get('title', f'Chart {idx+1}')
+                
+                if chart_data:
+                    user_chart_buf = generate_user_data_chart(chart_data, chart_type)
+                    if user_chart_buf:
+                        paper["figures"][f"figure{figure_num}"] = {
+                            "caption": f"Figure {figure_num}: {chart_title}",
+                            "data": base64.b64encode(user_chart_buf.getvalue()).decode('utf-8'),
+                            "type": "user_chart"
+                        }
+                        figure_num += 1
+            except Exception as e:
+                print(f"⚠️ Chart {idx+1} error: {e}")
+        
+        print("✅ Figures done\n")
     except Exception as e:
-        print(f"Warning: {e}")
+        print(f"⚠️ Figure error: {e}\n")
     
-    paper["sections"]["references"] = "\n".join(get_citations(topic))
+    # Citations
+    if use_rag and retrieved_papers:
+        paper["sections"]["references"] = "\n".join(generate_ieee_citations(retrieved_papers))
+    else:
+        paper["sections"]["references"] = "\n".join(get_citations(research_topic))
     
-    total_words = sum(len(content.split()) for content in paper["sections"].values())
+    # Metadata
+    total_words = sum(len(str(content).split()) for content in paper["sections"].values())
     paper["metadata"] = {
         "word_count": total_words,
         "page_estimate": round(total_words / 250),
-        "has_figures": len(paper.get("figures", {}))
+        "has_figures": len([k for k in paper.get("figures", {}).keys() if k.startswith('figure')]),
+        "has_tables": len([k for k in paper.get("figures", {}).keys() if k.startswith('table')]),
+        "rag_papers_used": len(retrieved_papers),
+        "user_charts_added": len(user_charts)
     }
     
-    print(f"✅ Done: {total_words} words, {len(paper['figures'])} figures")
+    print(f"{'='*70}")
+    print(f"✅ COMPLETE! {total_words} words")
+    print(f"{'='*70}\n")
     
     return jsonify({"success": True, "paper": paper})
+
+@app.route('/api/regenerate-titles', methods=['POST'])
+def regenerate_titles():
+    data = request.json
+    description = data.get('description', '')
+    
+    if not description:
+        return jsonify({"success": False, "error": "Description required"}), 400
+    
+    try:
+        titles = generate_alternative_titles(description, count=3)
+        
+        if titles:
+            return jsonify({"success": True, "titles": titles})
+        else:
+            return jsonify({"success": False, "error": "Failed to generate titles"}), 500
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/api/plagiarism-check', methods=['POST'])
 def plagiarism_check():
@@ -426,8 +947,8 @@ def export_pdf():
     
     title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=18, leading=22,
                                  alignment=TA_CENTER, fontName='Times-Bold', spaceAfter=12)
-    author_style = ParagraphStyle('Author', parent=styles['Normal'], fontSize=10, leading=12,
-                                   alignment=TA_CENTER, fontName='Times-Roman', spaceAfter=3)
+    author_style = ParagraphStyle('Author', parent=styles['Normal'], fontSize=10, leading=14,
+                                   alignment=TA_CENTER, fontName='Times-Roman', spaceAfter=6)
     section_style = ParagraphStyle('Section', parent=styles['Heading2'], fontSize=10, leading=12,
                                     fontName='Times-Bold', spaceAfter=6, spaceBefore=8)
     body_style = ParagraphStyle('Body', parent=styles['BodyText'], fontSize=9, leading=11,
@@ -436,13 +957,19 @@ def export_pdf():
     caption_style = ParagraphStyle('Caption', parent=body_style, fontSize=8, alignment=TA_CENTER, 
                                    fontName='Times-Italic', firstLineIndent=0)
     
+    # Title
     elements.append(Paragraph(paper.get('title', 'Research Paper'), title_style))
     elements.append(Spacer(1, 0.1*inch))
     
-    author_info = f"{paper.get('author', 'Author')}<br/>{paper.get('affiliation', 'Affiliation')}<br/>Email: {paper.get('email', 'email@edu')}"
-    elements.append(Paragraph(author_info, author_style))
+    # Multiple authors
+    authors = paper.get('authors', [])
+    for author in authors:
+        author_block = f"{author.get('name', 'Author')}<br/>{author.get('affiliation', 'Institution')}<br/>{author.get('email', 'email@edu')}"
+        elements.append(Paragraph(author_block, author_style))
+    
     elements.append(Spacer(1, 0.15*inch))
     
+    # Abstract
     if 'abstract' in paper.get('sections', {}):
         elements.append(Paragraph("<b><i>Abstract</i></b>—", section_style))
         elements.append(Paragraph(paper['sections']['abstract'], abstract_style))
@@ -451,6 +978,7 @@ def export_pdf():
     elements.append(Paragraph(f"<b>DOI:</b> {paper.get('doi', 'N/A')}", abstract_style))
     elements.append(Spacer(1, 0.15*inch))
     
+    # Sections
     sections_order = ['introduction', 'literature_review', 'methodology', 'results', 'discussion', 'conclusion', 'references']
     section_titles = {
         'introduction': 'I. INTRODUCTION',
@@ -474,21 +1002,24 @@ def export_pdf():
             if key == 'results' and 'figures' in paper:
                 elements.append(Spacer(1, 0.1*inch))
                 
-                if 'figure1' in paper['figures']:
+                # Add figures and tables
+                for fig_key in sorted([k for k in paper['figures'].keys() if k.startswith('figure')]):
                     try:
-                        fig_data = base64.b64decode(paper['figures']['figure1']['data'])
+                        fig_data = base64.b64decode(paper['figures'][fig_key]['data'])
                         fig_buf = BytesIO(fig_data)
                         img = RLImage(fig_buf, width=frame_width*0.9, height=2.5*inch)
                         elements.append(img)
-                        elements.append(Paragraph(paper['figures']['figure1']['caption'], caption_style))
+                        elements.append(Paragraph(paper['figures'][fig_key]['caption'], caption_style))
                         elements.append(Spacer(1, 0.1*inch))
                     except:
                         pass
                 
-                if 'table1' in paper['figures']:
+                for table_key in sorted([k for k in paper['figures'].keys() if k.startswith('table')]):
                     try:
-                        table_data = paper['figures']['table1']['data']
-                        t = Table(table_data, colWidths=[frame_width*0.18]*5)
+                        table_data = paper['figures'][table_key]['data']
+                        num_cols = len(table_data[0])
+                        col_width = frame_width / num_cols * 0.9
+                        t = Table(table_data, colWidths=[col_width] * num_cols)
                         t.setStyle(TableStyle([
                             ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#667eea')),
                             ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
@@ -500,18 +1031,8 @@ def export_pdf():
                             ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
                         ]))
                         elements.append(t)
-                        elements.append(Paragraph(paper['figures']['table1']['caption'], caption_style))
+                        elements.append(Paragraph(paper['figures'][table_key]['caption'], caption_style))
                         elements.append(Spacer(1, 0.1*inch))
-                    except:
-                        pass
-                
-                if 'figure2' in paper['figures']:
-                    try:
-                        fig_data = base64.b64decode(paper['figures']['figure2']['data'])
-                        fig_buf = BytesIO(fig_data)
-                        img = RLImage(fig_buf, width=frame_width*0.9, height=2.5*inch)
-                        elements.append(img)
-                        elements.append(Paragraph(paper['figures']['figure2']['caption'], caption_style))
                     except:
                         pass
             
@@ -529,8 +1050,6 @@ def export_docx():
         from docx import Document
         from docx.shared import Inches, Pt
         from docx.enum.text import WD_ALIGN_PARAGRAPH
-        from docx.oxml.ns import qn
-        from docx.oxml import OxmlElement
         
         data = request.json
         paper = data.get('paper', {})
@@ -540,69 +1059,36 @@ def export_docx():
         
         doc = Document()
         
-        sections = doc.sections
-        for section in sections:
-            section.top_margin = Inches(0.75)
-            section.bottom_margin = Inches(0.75)
-            section.left_margin = Inches(0.75)
-            section.right_margin = Inches(0.75)
-        
-        section = doc.sections[0]
-        sectPr = section._sectPr
-        cols = sectPr.xpath('./w:cols')[0] if sectPr.xpath('./w:cols') else OxmlElement('w:cols')
-        cols.set(qn('w:num'), '2')
-        cols.set(qn('w:space'), '288')
-        if not sectPr.xpath('./w:cols'):
-            sectPr.append(cols)
-        
+        # Title
         title = doc.add_heading(paper.get('title', 'Research Paper'), 0)
         title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        title_run = title.runs[0]
-        title_run.font.size = Pt(18)
-        title_run.font.bold = True
-        title_run.font.name = 'Times New Roman'
         
-        author_para = doc.add_paragraph()
-        author_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        author_run = author_para.add_run(f"{paper.get('author', 'Author')}\n")
-        author_run.font.size = Pt(10)
-        author_run.font.name = 'Times New Roman'
-        
-        affil_run = author_para.add_run(f"{paper.get('affiliation', 'Institution')}\n")
-        affil_run.font.size = Pt(9)
-        affil_run.font.italic = True
-        affil_run.font.name = 'Times New Roman'
-        
-        email_run = author_para.add_run(f"Email: {paper.get('email', 'N/A')}")
-        email_run.font.size = Pt(9)
-        email_run.font.name = 'Times New Roman'
+        # Authors
+        authors = paper.get('authors', [])
+        for author in authors:
+            author_para = doc.add_paragraph()
+            author_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            author_run = author_para.add_run(f"{author.get('name', 'Author')}\n")
+            author_run.font.size = Pt(10)
+            affil_run = author_para.add_run(f"{author.get('affiliation', 'Institution')}\n")
+            affil_run.font.size = Pt(9)
+            affil_run.font.italic = True
+            email_run = author_para.add_run(f"{author.get('email', 'N/A')}\n")
+            email_run.font.size = Pt(9)
         
         doc.add_paragraph()
         
+        # Abstract
         if 'abstract' in paper.get('sections', {}):
             abstract_heading = doc.add_paragraph()
             abstract_heading_run = abstract_heading.add_run('Abstract—')
             abstract_heading_run.font.bold = True
             abstract_heading_run.font.italic = True
-            abstract_heading_run.font.size = Pt(9)
-            abstract_heading_run.font.name = 'Times New Roman'
             
             abstract_para = doc.add_paragraph(paper['sections']['abstract'])
             abstract_para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            for run in abstract_para.runs:
-                run.font.size = Pt(9)
-                run.font.italic = True
-                run.font.name = 'Times New Roman'
-            
-            doc.add_paragraph()
         
-        doi_para = doc.add_paragraph()
-        doi_run = doi_para.add_run(f"DOI: {paper.get('doi', 'N/A')}")
-        doi_run.font.size = Pt(8)
-        doi_run.font.name = 'Times New Roman'
-        
-        doc.add_paragraph()
-        
+        # Rest of sections
         sections_order = ['introduction', 'literature_review', 'methodology', 'results', 'discussion', 'conclusion', 'references']
         section_titles = {
             'introduction': 'I. INTRODUCTION',
@@ -617,22 +1103,12 @@ def export_docx():
         for key in sections_order:
             if key in paper.get('sections', {}):
                 heading = doc.add_heading(section_titles[key], level=1)
-                heading_run = heading.runs[0]
-                heading_run.font.size = Pt(10)
-                heading_run.font.bold = True
-                heading_run.font.name = 'Times New Roman'
-                heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                
                 content = paper['sections'][key]
-                paragraphs = content.split('\n\n')
                 
-                for para_text in paragraphs:
+                for para_text in content.split('\n\n'):
                     if para_text.strip():
                         body_para = doc.add_paragraph(para_text.strip())
                         body_para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-                        for run in body_para.runs:
-                            run.font.size = Pt(9)
-                            run.font.name = 'Times New Roman'
         
         buffer = BytesIO()
         doc.save(buffer)
@@ -649,10 +1125,22 @@ def export_docx():
 
 if __name__ == '__main__':
     print("\n" + "="*70)
-    print("🎓 AI Research Paper Generator - Professional Edition")
+    print("🎓 AI Research Paper Generator v3.0 - Multi-Author Support")
     print("="*70)
-    print("📝 Ollama: ollama run mistral")
-    print("🌐 URL: http://localhost:8080")
-    print("⚡ Features: Fast | Plagiarism | IEEE Format | Figures | OCR")
+    print(f"📝 Model: {MODEL_NAME}")
+    print("="*70)
+    
+    try:
+        test = requests.get("http://localhost:11434/api/tags", timeout=5)
+        if test.status_code == 200:
+            print("✅ Ollama running!")
+        else:
+            print("⚠️ Ollama issue")
+    except:
+        print("❌ Cannot connect to Ollama!")
+    
+    print("="*70)
+    print("🚀 Server: http://localhost:8080")
     print("="*70 + "\n")
+    
     app.run(debug=True, port=8080, host='0.0.0.0')

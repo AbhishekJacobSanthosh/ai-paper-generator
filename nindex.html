@@ -163,7 +163,30 @@
         .paper-title {
             font-size: 24px;
             font-weight: bold;
-            margin-bottom: 10px;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        .authors-list {
+            text-align: center;
+            margin-top: 15px;
+        }
+        .author-block {
+            display: inline-block;
+            margin: 10px 20px;
+            vertical-align: top;
+        }
+        .author-name {
+            font-weight: bold;
+            font-size: 14px;
+        }
+        .author-affiliation {
+            font-size: 12px;
+            opacity: 0.9;
+            font-style: italic;
+        }
+        .author-email {
+            font-size: 11px;
+            opacity: 0.85;
         }
         .paper-meta {
             display: grid;
@@ -326,6 +349,34 @@
             max-height: 80vh;
             overflow-y: auto;
         }
+        .author-entry {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border-left: 4px solid #667eea;
+            position: relative;
+        }
+        .author-entry-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .remove-author-btn {
+            background: #dc3545;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            width: auto;
+        }
+        .add-author-btn {
+            background: #28a745;
+            margin-top: 10px;
+        }
         @media (max-width: 768px) {
             .grid-2 { grid-template-columns: 1fr; }
             .container { padding: 20px; }
@@ -343,7 +394,7 @@
             <span class="badge">📄 4+ Pages</span>
             <span class="badge new">🔍 RAG-Powered</span>
             <span class="badge new">📊 Dynamic Figures</span>
-            <span class="badge new">📈 User Data</span>
+            <span class="badge new">👥 Multi-Author</span>
             <span class="badge new">✨ AI Titles</span>
             <span class="badge">🖼️ OCR</span>
         </div>
@@ -356,7 +407,7 @@
         
         <div id="text-tab" class="tab-content active">
             <div class="info-box">
-                💡 Enter a short title OR detailed description. AI will auto-generate a professional title if needed!
+                💡 Enter a short title OR detailed description. AI will auto-generate a professional title!
             </div>
             
             <div class="input-group">
@@ -364,7 +415,7 @@
                 <textarea 
                     id="topic" 
                     rows="3" 
-                    placeholder="Short: 'Transformer Architectures in NLP' OR Long: 'I want to research how transformer models improve natural language processing...'"
+                    placeholder="Short: 'Transformer Architectures in NLP' OR Long: 'I want to research how transformer models...'"
                     style="min-height: 80px; font-family: inherit;"
                 ></textarea>
                 <div style="display: flex; gap: 10px; margin-top: 10px; align-items: center;">
@@ -377,21 +428,17 @@
                 </div>
             </div>
             
-            <div class="grid-2">
-                <div class="input-group">
-                    <label>👤 Author Name</label>
-                    <input type="text" id="authorName" placeholder="Your Name" value="Student Researcher">
-                </div>
-                <div class="input-group">
-                    <label>📧 Email</label>
-                    <input type="email" id="email" placeholder="email@edu" value="student@university.edu">
-                </div>
+            <div class="info-box success">
+                👥 <strong>Multiple Authors:</strong> Add all paper authors below
             </div>
             
-            <div class="input-group">
-                <label>🏛️ Affiliation</label>
-                <input type="text" id="affiliation" placeholder="University Name" value="Department of CS, University">
+            <div id="authorsContainer">
+                <!-- Author entries will be added here -->
             </div>
+            
+            <button onclick="addAuthor()" class="add-author-btn" style="width: auto; padding: 10px 20px; margin-bottom: 20px;">
+                ➕ Add Author
+            </button>
             
             <div class="checkbox-group">
                 <input type="checkbox" id="useRAG" checked>
@@ -431,7 +478,7 @@
         
         <div id="data-tab" class="tab-content">
             <div class="info-box warning">
-                📊 Upload your own data for custom tables and charts in the paper!
+                📊 Upload your own data for custom tables and charts!
             </div>
             
             <button class="collapsible" onclick="toggleCollapsible(this)">
@@ -440,14 +487,13 @@
             <div class="collapsible-content">
                 <div class="info-box">
                     Format: Comma-separated values. First row = headers.<br>
-                    Example:<br>
                     <code>Method,Accuracy,Precision<br>Baseline,72.3,71.5<br>Proposed,92.1,91.8</code>
                 </div>
                 <textarea id="userTableData" rows="8" placeholder="Paste CSV data here..."></textarea>
             </div>
             
             <button class="collapsible" onclick="toggleCollapsible(this)">
-                📈 Upload Chart 1 (CSV Format)
+                📈 Upload Chart 1
             </button>
             <div class="collapsible-content">
                 <textarea id="userChartData1" rows="6" placeholder="Paste CSV for Chart 1..."></textarea>
@@ -465,7 +511,7 @@
             </div>
             
             <button class="collapsible" onclick="toggleCollapsible(this)">
-                📈 Upload Chart 2 (CSV Format)
+                📈 Upload Chart 2
             </button>
             <div class="collapsible-content">
                 <textarea id="userChartData2" rows="6" placeholder="Paste CSV for Chart 2..."></textarea>
@@ -483,7 +529,7 @@
             </div>
             
             <button class="collapsible" onclick="toggleCollapsible(this)">
-                📈 Upload Chart 3 (CSV Format)
+                📈 Upload Chart 3
             </button>
             <div class="collapsible-content">
                 <textarea id="userChartData3" rows="6" placeholder="Paste CSV for Chart 3..."></textarea>
@@ -501,7 +547,7 @@
             </div>
             
             <div class="info-box success" style="margin-top: 20px;">
-                ℹ️ After uploading data, go to "Generate Paper" tab. Your charts will be Figure 3, 4, 5!
+                ℹ️ After uploading data, go to "Generate Paper" tab!
             </div>
         </div>
         
@@ -513,7 +559,6 @@
         <div id="output"></div>
     </div>
 
-    <!-- Title Modal -->
     <div id="titleModal">
         <div class="modal-content">
             <h3 style="margin: 0 0 20px 0; color: #667eea;">✨ AI-Generated Title Suggestions</h3>
@@ -525,6 +570,69 @@
     <script>
         let suggestedTitles = [];
         let currentPaper = null;
+        let authorCount = 0;
+        
+        // Initialize with one author
+        document.addEventListener('DOMContentLoaded', function() {
+            addAuthor();
+        });
+        
+        function addAuthor() {
+            authorCount++;
+            const container = document.getElementById('authorsContainer');
+            const authorDiv = document.createElement('div');
+            authorDiv.className = 'author-entry';
+            authorDiv.id = `author-${authorCount}`;
+            
+            authorDiv.innerHTML = `
+                <div class="author-entry-header">
+                    <strong>👤 Author ${authorCount}</strong>
+                    ${authorCount > 1 ? `<button class="remove-author-btn" onclick="removeAuthor(${authorCount})">✕ Remove</button>` : ''}
+                </div>
+                <div class="grid-2">
+                    <div class="input-group">
+                        <label>Name *</label>
+                        <input type="text" id="authorName${authorCount}" placeholder="Full Name" value="${authorCount === 1 ? 'Student Researcher' : ''}">
+                    </div>
+                    <div class="input-group">
+                        <label>Email *</label>
+                        <input type="email" id="authorEmail${authorCount}" placeholder="email@university.edu" value="${authorCount === 1 ? 'student@university.edu' : ''}">
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Affiliation *</label>
+                    <input type="text" id="authorAffiliation${authorCount}" placeholder="Department, University" value="${authorCount === 1 ? 'Department of CS, University' : ''}">
+                </div>
+            `;
+            
+            container.appendChild(authorDiv);
+        }
+        
+        function removeAuthor(id) {
+            const authorDiv = document.getElementById(`author-${id}`);
+            if (authorDiv) {
+                authorDiv.remove();
+            }
+        }
+        
+        function getAuthors() {
+            const authors = [];
+            const container = document.getElementById('authorsContainer');
+            const authorDivs = container.querySelectorAll('.author-entry');
+            
+            authorDivs.forEach((div) => {
+                const id = div.id.split('-')[1];
+                const name = document.getElementById(`authorName${id}`)?.value.trim();
+                const email = document.getElementById(`authorEmail${id}`)?.value.trim();
+                const affiliation = document.getElementById(`authorAffiliation${id}`)?.value.trim();
+                
+                if (name && email && affiliation) {
+                    authors.push({ name, email, affiliation });
+                }
+            });
+            
+            return authors;
+        }
         
         function switchTab(tab) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -545,9 +653,7 @@
         
         async function generatePaper() {
             const topic = document.getElementById('topic').value.trim();
-            const authorName = document.getElementById('authorName').value.trim();
-            const email = document.getElementById('email').value.trim();
-            const affiliation = document.getElementById('affiliation').value.trim();
+            const authors = getAuthors();
             const useRAG = document.getElementById('useRAG').checked;
             const userTableData = document.getElementById('userTableData').value.trim();
             
@@ -571,6 +677,11 @@
                 return;
             }
             
+            if (authors.length === 0) {
+                alert('⚠️ Please add at least one author');
+                return;
+            }
+            
             const wordCount = topic.split(' ').length;
             let loadingMsg = '⚡ Generating paper...';
             if (wordCount > 10) loadingMsg = '🎯 Generating title and paper...';
@@ -584,9 +695,7 @@
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
                         topic: topic,
-                        author_name: authorName,
-                        email: email,
-                        affiliation: affiliation,
+                        authors: authors,
                         use_rag: useRAG,
                         user_table_data: userTableData,
                         user_charts: userCharts
@@ -681,7 +790,7 @@
             closeTitleModal();
             
             const hint = document.getElementById('titleHint');
-            hint.innerHTML = '✅ Title selected! Click Generate to proceed.';
+            hint.innerHTML = '✅ Title selected!';
             hint.style.color = '#28a745';
             
             setTimeout(() => {
@@ -745,12 +854,28 @@
             let ragBadge = paper.rag_enabled ? 
                 `<span class="badge new" style="margin-left: 10px;">🔍 RAG-Enhanced</span>` : '';
             
+            // Build authors display (IEEE format)
+            let authorsHtml = '';
+            if (paper.authors && paper.authors.length > 0) {
+                paper.authors.forEach((author, idx) => {
+                    authorsHtml += `
+                        <div class="author-block">
+                            <div class="author-name">${author.name}</div>
+                            <div class="author-affiliation">${author.affiliation}</div>
+                            <div class="author-email">${author.email}</div>
+                        </div>
+                    `;
+                });
+            }
+            
             let html = `
                 <div class="paper-header">
                     <div class="paper-title">${paper.title || 'Research Paper'} ${ragBadge}</div>
-                    <div style="margin-top: 8px; opacity: 0.9;">
-                        👤 ${paper.author} | 🏛️ ${paper.affiliation}<br/>
-                        📧 ${paper.email} | 🔗 DOI: ${paper.doi}
+                    <div class="authors-list">
+                        ${authorsHtml}
+                    </div>
+                    <div style="text-align: center; margin-top: 15px; opacity: 0.9;">
+                        🔗 DOI: ${paper.doi || 'N/A'}
                     </div>
                     <div class="paper-meta">
                         <div class="meta-card">
@@ -930,6 +1055,10 @@
             if (!currentPaper) return;
             
             let text = `${currentPaper.title}\n\n`;
+            currentPaper.authors.forEach(author => {
+                text += `${author.name}\n${author.affiliation}\n${author.email}\n\n`;
+            });
+            
             Object.entries(currentPaper.sections).forEach(([key, content]) => {
                 text += `\n${key.toUpperCase()}\n${content}\n`;
             });
